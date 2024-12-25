@@ -6,17 +6,23 @@ from bs4 import BeautifulSoup, SoupStrainer
 
 
 #TODO: Still there are newlines making their way into the final wordlists. eleiminate.
+#   - looking at 4-word results from soderkulla.se, there are still some 1 and 2-word results mixed in.
+#TODO: There are links on 404 pages, leading
 
 
 
-TO_SCRAPE = "https://cry-of-fear.fandom.com/wiki/FAMAS"
+ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this.
+#ROOT_URL = "https://crawler-test.com/"
+IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #TODO: Is this always the same as the root diredtory?
+OUT_OF_SCOPE = ["/Special:Log"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site.
+
 INCLUDE_TAGS = ["p", "big", "small","span", "b", "strong", "i", "em", "mark", "del", "ins", "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "q", "code", "li", "dt", "dd"] #TODO: manually add more "text" elements to analyze here
 STRIP_CHARS = ["\n", "\r", "\t"]
-IN_SCOPE = "https://cry-of-fear.fandom.com/wiki/"
 
-DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg"] #TODO: I want to make a whitelist instead, but then how would I allow no file extension? Instead, this solution requires user to manually modify the blacklist.
+
+DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #TODO: I want to make a whitelist instead, but then how would I allow no file extension? Instead, this solution requires user to manually modify the blacklist.
 LINK_NR = 0
-STOP_AFTER_X_LINKS = 300
+STOP_AFTER_X_LINKS = 3000
 SITE_LINKS = [] #Dynamically filled with all links/pages on the site
 
 
@@ -81,43 +87,59 @@ def write_wordlist(name:str, content:str):
 
 
 
-#Given a URL, gather all href's from it and visit each URL if it hasn't already been visited
-#TODO: It visits .ogg and similar files, I don't want this
+#Given a URL, gather all href's from it and visit each URL if it hasn't already been visited. Recursive.
+#NOTE: one commented-out href on CoF wiki start page literally looks like this:   href="//cry-of-fear.fandom.com"  (it's not a bug in your program)
+#TODO: why does /register get included, it doesn't start with with /wiki
 def build_sitemap(URL:str, link_nr:int):
     global LINK_NR
     if(LINK_NR >= STOP_AFTER_X_LINKS):    #TODO: temporary
         return
         
-    print(f"\tINFO: processing link {link_nr}, URL = {URL}")
-    skip_link = False
     res = requests.get(URL)
     links_on_url = []
+    print(f"\tINFO: processing link {link_nr}, code = {res.status_code}, URL = {URL}")
+
+    if(res.status_code == 404): #TODO: will miss any important links on 404 sites.
+        return
+
     for link in BeautifulSoup(res.text, 'html.parser').find_all("a"):
         if link.has_attr('href'):
-            if(link["href"].startswith(IN_SCOPE)):  #Will miss all links which are relative (and probably more), eg. /wiki/FAMAS
+            link_text = link["href"]
+            if(link_text.startswith(IN_SCOPE) or link_text.startswith("/")):
+                blacklisted_extension = False
                 for extension in DISALLOWED_FILE_EXTENSIONS: #Filter out URL's with disallowed file extensions
-                    if(link["href"].endswith(extension)):
-                        skip_link = True
+                    if(link_text.endswith(extension)):
+                        blacklisted_extension = True
                         break
-                if(not skip_link):  
-                    if(link["href"] not in SITE_LINKS): #If not already visited, visit link and extract recursively
-                        SITE_LINKS.append(link['href'])
-                        #global LINK_NR
-                        LINK_NR += 1
-                        build_sitemap(link["href"], LINK_NR)
 
-    #links_string = "\n".join(links_on_url)
-    #print(f"DEBUG: links: {links_string}")
-    #return links_string
+                if(not blacklisted_extension): 
+                    to_visit = None
+                    if(link_text.startswith("/")):    #Handle relative links.
+                        to_visit = ROOT_URL[:-1] + link_text if(ROOT_URL.endswith("/")) else ROOT_URL + link_text   #domain + the relative link  TODO: always assumes a relative URL start with /
+                    else: to_visit = link_text
 
+                    #If path is blacklisted
+                    path_is_blacklisted = False
+                    for bad in OUT_OF_SCOPE:
+                        if(to_visit.startswith(IN_SCOPE + bad)):
+                            path_is_blacklisted = True
+                            break
+                            
+                    if(not path_is_blacklisted):
+                        if(to_visit not in SITE_LINKS): #If not already visited, visit link and extract recursively
+                            SITE_LINKS.append(to_visit)
+                            #global LINK_NR
+                            LINK_NR += 1
+                            #print(f"\t\tDEBUG: link I will visit now: {to_visit}")
+                            build_sitemap(to_visit, LINK_NR)
 
 
 
 #TODO: Time measruement for how long it takes to extract all links
 if __name__=="__main__":
     #Enumerate the website structure/sitemap
-    root_URL = "https://cry-of-fear.fandom.com/wiki/Cry_of_Fear_Wiki"
-    build_sitemap(root_URL, LINK_NR)
+    start_URL = "https://cry-of-fear.fandom.com/wiki/Cry_of_Fear_Wiki"
+    build_sitemap(start_URL, LINK_NR)
     site_links_string = "\n".join(SITE_LINKS)
     #print(f"\nDEBUG: Website complete sitemap:\n\n{site_links_string}")
 
@@ -129,7 +151,7 @@ if __name__=="__main__":
     words4 = []
     for i, link in enumerate(SITE_LINKS):
         print(f"INFO: Extracting from link nr {i}: \"{link}\":")
-        if(i <= 1000):
+        if(i <= 10000):
             link_contents = scrape_site(link)
             words1 += (to_wordlist(link_contents, 1, delimiter))
             words2 += (to_wordlist(link_contents, 2, delimiter))
