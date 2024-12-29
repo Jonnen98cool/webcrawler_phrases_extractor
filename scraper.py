@@ -10,17 +10,21 @@ from bs4 import BeautifulSoup, SoupStrainer
 #TODO: There are links on 404 pages, leading
 
 
-
-ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this.
+#NOTE: These few variables you need to manually edit for each site.
+#- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this. An example is:   href="/TODO:"
 #ROOT_URL = "https://crawler-test.com/"
-IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #TODO: Is this always the same as the root diredtory?
-OUT_OF_SCOPE = ["/Special:Log"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site.
+IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #TODO: Some URLs NOT beginning with /wiki got included, investigate
+OUT_OF_SCOPE_PATH = ["/Special:Log", "/Special:Search", "/register", "/login", "/reset-password", "/signin", "/User", "/File:", "/Template:", "/Forum:", "/Talk:"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site.
+OUT_OF_SCOPE_STRING = ["?"] #NOTE: if any of the substrings in here are detected as part of the URL NOT in the IN_SCOPE, don't analyse that URL
+DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #TODO: I want to make a whitelist instead, but then how would I allow no file extension? Instead, this solution requires user to manually modify the blacklist.
+#- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
 
 INCLUDE_TAGS = ["p", "big", "small","span", "b", "strong", "i", "em", "mark", "del", "ins", "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "q", "code", "li", "dt", "dd"] #TODO: manually add more "text" elements to analyze here
 STRIP_CHARS = ["\n", "\r", "\t"]
 
 
-DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #TODO: I want to make a whitelist instead, but then how would I allow no file extension? Instead, this solution requires user to manually modify the blacklist.
+
 LINK_NR = 0
 STOP_AFTER_X_LINKS = 3000
 SITE_LINKS = [] #Dynamically filled with all links/pages on the site
@@ -118,20 +122,29 @@ def build_sitemap(URL:str, link_nr:int):
                         to_visit = ROOT_URL[:-1] + link_text if(ROOT_URL.endswith("/")) else ROOT_URL + link_text   #domain + the relative link  TODO: always assumes a relative URL start with /
                     else: to_visit = link_text
 
-                    #If path is blacklisted
-                    path_is_blacklisted = False
-                    for bad in OUT_OF_SCOPE:
-                        if(to_visit.startswith(IN_SCOPE + bad)):
-                            path_is_blacklisted = True
+
+                    #If part of string is blacklisted  #TODO: this should propably be checked first
+                    string_is_blacklisted = False
+                    for bad in OUT_OF_SCOPE_STRING:
+                        if(bad in to_visit[len(IN_SCOPE):]):    #TODO: check that this properly does NOT check the entire IN_SCOPE for the blacklisted substring, it should only check AFTER that
+                            string_is_blacklisted = True
                             break
-                            
-                    if(not path_is_blacklisted):
-                        if(to_visit not in SITE_LINKS): #If not already visited, visit link and extract recursively
-                            SITE_LINKS.append(to_visit)
-                            #global LINK_NR
-                            LINK_NR += 1
-                            #print(f"\t\tDEBUG: link I will visit now: {to_visit}")
-                            build_sitemap(to_visit, LINK_NR)
+
+                    if(not string_is_blacklisted):
+                        #If path is blacklisted
+                        path_is_blacklisted = False
+                        for bad in OUT_OF_SCOPE_PATH:
+                            if(to_visit.startswith(IN_SCOPE + bad)):
+                                path_is_blacklisted = True
+                                break
+                                
+                        if(not path_is_blacklisted):
+                            if(to_visit not in SITE_LINKS): #If not already visited, visit link and extract recursively
+                                SITE_LINKS.append(to_visit)
+                                #global LINK_NR
+                                LINK_NR += 1
+                                #print(f"\t\tDEBUG: link I will visit now: {to_visit}")
+                                build_sitemap(to_visit, LINK_NR)
 
 
 
