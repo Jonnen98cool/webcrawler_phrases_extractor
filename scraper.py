@@ -1,33 +1,36 @@
 import requests
+import time
 from bs4 import BeautifulSoup, SoupStrainer
 
 
-#NOTE: Without a simple rule list (in this case stripping all dots), the phrase "Sony Ericsson W610i" does not get cracked. It's found on the page but it has a dot at the end.
+#NOTE for challenge "Can't Weld When Gas Are Gone": Without a simple rule list (in this case stripping all dots), the phrase "Sony Ericsson W610i" does not get cracked. It's found on the page but it has a dot at the end.
 
 
-#TODO: Still there are newlines making their way into the final wordlists. eleiminate.
-#   - looking at 4-word results from soderkulla.se, there are still some 1 and 2-word results mixed in.
-#TODO: There are links on 404 pages, leading
+#TODO: Still there are newlines or something making their way into the final wordlists. eleiminate.
+#   - in the 3-word file for example, Ctrl + f :ing for "Iglesias" reveals the problem (this is because certain words in the phrase are enclosed in <b> tags?)
+#TODO: Multithreading, I think I'm network-bottlenecked?
 
 
 #NOTE: These few variables you need to manually edit for each site.
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this. An example is:   href="/TODO:"
-#ROOT_URL = "https://crawler-test.com/"
-IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #TODO: Some URLs NOT beginning with /wiki got included, investigate
-OUT_OF_SCOPE_PATH = ["/Special:Log", "/Special:Search", "/register", "/login", "/reset-password", "/signin", "/User", "/File:", "/Template:", "/Forum:", "/Talk:"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site.
-OUT_OF_SCOPE_STRING = ["?"] #NOTE: if any of the substrings in here are detected as part of the URL NOT in the IN_SCOPE, don't analyse that URL
-DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #TODO: I want to make a whitelist instead, but then how would I allow no file extension? Instead, this solution requires user to manually modify the blacklist.
+START_URL = "https://cry-of-fear.fandom.com/wiki/Cry_of_Fear_Wiki" #NOTE: the URL you want the scraper to start from.
+ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this. An example of a relative path is:   href="/wiki/Co-op_Campaign"
+IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #NOTE: Sometimes appropriately set to the same URL as the webroot, all found URL:s must start with this string in order to be included for processing (or translate to starting with this in the case of relative paths being used).
+OUT_OF_SCOPE_PATH = ["/Special:Log", "/Special:Search", "/register", "/login", "/reset-password", "/signin", "/User", "/File:", "/Template:", "/Forum:", "/Talk:", "/Message_Wall:", "/Special:", "/Thread:", "/MediaWiki:"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site. If any of these values directly follow the IN_SCOPE URL, don't process that URL. 
+OUT_OF_SCOPE_STRING = ["?", "#"] #NOTE: if any of the substrings in here are detected ANYWHERE as part of the URL AFTER the IN_SCOPE, don't process that URL.
+DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #NOTE: Don't process any path's ending with these strings.
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
 
-INCLUDE_TAGS = ["p", "big", "small","span", "b", "strong", "i", "em", "mark", "del", "ins", "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "q", "code", "li", "dt", "dd"] #TODO: manually add more "text" elements to analyze here
-STRIP_CHARS = ["\n", "\r", "\t"]
 
+INCLUDE_TAGS = ["p", "big", "small","span", "b", "strong", "i", "em", "mark", "del", "ins", "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "q", "code", "li", "dt", "dd"] #TODO: manually add more "text" elements to analyze here. Are there any more??
+STRIP_CHARS = ["\n", "\r", "\t"]    #NOTE: strip all occurences of these chars in gathered phrases.
 
 
 LINK_NR = 0
-STOP_AFTER_X_LINKS = 3000
+#STOP_AFTER_X_LINKS = 3000
 SITE_LINKS = [] #Dynamically filled with all links/pages on the site
+
+
 
 
 
@@ -55,7 +58,6 @@ def to_wordlist(site_content, phrase_length:int, delimiter:str=' ') -> [str]:
     wordlist = []
     for tag_content in site_content:
         for phrase in tag_content:
-
             nr_of_words = phrase.count(delimiter) + 1   #I can see this NOT being a robust way of achieving what I wan
             delimiter_indexes = [index for index, char in enumerate(phrase) if(char == delimiter)]
             word_separator_indexes = [0] + delimiter_indexes + [len(phrase) - 1]    #Add index 0 and final index
@@ -92,86 +94,93 @@ def write_wordlist(name:str, content:str):
 
 
 #Given a URL, gather all href's from it and visit each URL if it hasn't already been visited. Recursive.
-#NOTE: one commented-out href on CoF wiki start page literally looks like this:   href="//cry-of-fear.fandom.com"  (it's not a bug in your program)
-#TODO: why does /register get included, it doesn't start with with /wiki
+#NOTE: one commented-out href on CoF wiki start page literally looks like this:   href="//cry-of-fear.fandom.com"  (that means it's not a bug in your program)
 def build_sitemap(URL:str, link_nr:int):
     global LINK_NR
-    if(LINK_NR >= STOP_AFTER_X_LINKS):    #TODO: temporary
-        return
+#    if(LINK_NR >= STOP_AFTER_X_LINKS):    #temporary
+#        return
         
     res = requests.get(URL)
     links_on_url = []
+    #print(f"\tINFO: processing link {link_nr}, code = {res.status_code}, URL = {URL}\t\tCL = {len(res.content)}")
     print(f"\tINFO: processing link {link_nr}, code = {res.status_code}, URL = {URL}")
 
-    if(res.status_code == 404): #TODO: will miss any important links on 404 sites.
+    if(res.status_code == 404): #NOTE: will miss any important links on 404 sites.
         return
 
-    for link in BeautifulSoup(res.text, 'html.parser').find_all("a"):
-        if link.has_attr('href'):
-            link_text = link["href"]
-            if(link_text.startswith(IN_SCOPE) or link_text.startswith("/")):
-                blacklisted_extension = False
-                for extension in DISALLOWED_FILE_EXTENSIONS: #Filter out URL's with disallowed file extensions
-                    if(link_text.endswith(extension)):
-                        blacklisted_extension = True
+    for link in BeautifulSoup(res.text, 'html.parser').find_all("a"):   #TODO: can links be found in other HTML tags than <a> ?
+        exit_iteration = False
+        if(link.has_attr('href')):
+            link_text = link["href"]  
+
+            #If relative path is being used, construct an absolute path from it called "to_visit"
+            to_visit = None
+            if(link_text.startswith("/")):    #Handle relative links.
+                to_visit = ROOT_URL[:-1] + link_text if(ROOT_URL.endswith("/")) else ROOT_URL + link_text   #domain + the relative link. This assumes a relative URL always start with /
+            else: to_visit = link_text
+
+            #Check if we are in scope
+            if(not to_visit.startswith(IN_SCOPE)):
+                exit_iteration = True
+
+            if(not exit_iteration):
+                #Check if substring occuring anywhere in the path is blacklisted (only checks the part after the IN_SCOPE)
+                scope_length = len(IN_SCOPE)
+                for bad in OUT_OF_SCOPE_STRING:
+                    if(bad in to_visit[scope_length:]):
+                        exit_iteration = True
                         break
 
-                if(not blacklisted_extension): 
-                    to_visit = None
-                    if(link_text.startswith("/")):    #Handle relative links.
-                        to_visit = ROOT_URL[:-1] + link_text if(ROOT_URL.endswith("/")) else ROOT_URL + link_text   #domain + the relative link  TODO: always assumes a relative URL start with /
-                    else: to_visit = link_text
-
-
-                    #If part of string is blacklisted  #TODO: this should propably be checked first
-                    string_is_blacklisted = False
-                    for bad in OUT_OF_SCOPE_STRING:
-                        if(bad in to_visit[len(IN_SCOPE):]):    #TODO: check that this properly does NOT check the entire IN_SCOPE for the blacklisted substring, it should only check AFTER that
-                            string_is_blacklisted = True
+                if(not exit_iteration):
+                    #Check if initial part of path is blacklisted
+                    for bad in OUT_OF_SCOPE_PATH:
+                        if(to_visit.startswith(IN_SCOPE + bad)):
+                            exit_iteration = True
                             break
 
-                    if(not string_is_blacklisted):
-                        #If path is blacklisted
-                        path_is_blacklisted = False
-                        for bad in OUT_OF_SCOPE_PATH:
-                            if(to_visit.startswith(IN_SCOPE + bad)):
-                                path_is_blacklisted = True
+                    if(not exit_iteration):
+                        #Check for blacklisted extensions
+                        for extension in DISALLOWED_FILE_EXTENSIONS:
+                            if(link_text.endswith(extension)):
+                                exit_iteration = True
                                 break
-                                
-                        if(not path_is_blacklisted):
-                            if(to_visit not in SITE_LINKS): #If not already visited, visit link and extract recursively
+
+
+                        if(not exit_iteration):
+                            #If we pass all checks and site has not already been visited, visit it
+                            if(to_visit not in SITE_LINKS):
                                 SITE_LINKS.append(to_visit)
-                                #global LINK_NR
                                 LINK_NR += 1
-                                #print(f"\t\tDEBUG: link I will visit now: {to_visit}")
                                 build_sitemap(to_visit, LINK_NR)
 
 
 
-#TODO: Time measruement for how long it takes to extract all links
+
 if __name__=="__main__":
     #Enumerate the website structure/sitemap
-    start_URL = "https://cry-of-fear.fandom.com/wiki/Cry_of_Fear_Wiki"
-    build_sitemap(start_URL, LINK_NR)
+    start_scrape = time.time()
+    build_sitemap(START_URL, LINK_NR)
     site_links_string = "\n".join(SITE_LINKS)
     #print(f"\nDEBUG: Website complete sitemap:\n\n{site_links_string}")
+    end_scrape = time.time()
+    print(f"INFO: scraping finished in {end_scrape - start_scrape}s\n")
 
     #Build the lists which will contain all words/phrases
+    start_wordlist_construction = time.time()
     delimiter = " "
     words1 = []
     words2 = []
     words3 = []
     words4 = []
     for i, link in enumerate(SITE_LINKS):
-        print(f"INFO: Extracting from link nr {i}: \"{link}\":")
-        if(i <= 10000):
-            link_contents = scrape_site(link)
-            words1 += (to_wordlist(link_contents, 1, delimiter))
-            words2 += (to_wordlist(link_contents, 2, delimiter))
-            words3 += (to_wordlist(link_contents, 3, delimiter))
-            words4 += (to_wordlist(link_contents, 4, delimiter))
-            
-            #print(f"DEBUG: here is what's returned from scrape_site(): \n\n{link_contents}")
+        print(f"\tINFO: Extracting phrases from link nr {i}: \"{link}\":")
+        link_contents = scrape_site(link)
+        words1 += (to_wordlist(link_contents, 1, delimiter))
+        words2 += (to_wordlist(link_contents, 2, delimiter))
+        words3 += (to_wordlist(link_contents, 3, delimiter))
+        words4 += (to_wordlist(link_contents, 4, delimiter))
+        
+        #print(f"DEBUG: here is what's returned from scrape_site(): \n\n{link_contents}")
 
     #Remove duplicates
     words1 = list(set(words1))
@@ -184,14 +193,6 @@ if __name__=="__main__":
     write_wordlist("2_words.txt", "\n".join(words2))
     write_wordlist("3_words.txt", "\n".join(words3))
     write_wordlist("4_words.txt", "\n".join(words4))
-        
 
-
-#    testing_list = [["One", "word", "phrases"], ["Now we're", "starting two", "word phrases"], ["Three word phrases", "are now incoming", "so brace yourself!"], ["11 12 13 14", "21 22 23 24", "31 32 33 34"]]
-#    single_words = to_wordlist(testing_list, 1, ' ')
-#    print(f"\nDEBUG: starting doulbe words now\n")
-#    double_words = to_wordlist(testing_list, 2, ' ')
-#    print(f"\nDEBUG: starting TRIPLE words now\n")
-#    tripple_words = to_wordlist(testing_list, 3, ' ')
-
-
+    end_wordlist_construction = time.time()
+    print(f"INFO: wordlist generation finished in {end_wordlist_construction - start_wordlist_construction}s")
