@@ -5,10 +5,15 @@ from bs4 import BeautifulSoup, SoupStrainer
 
 #NOTE for challenge "Can't Weld When Gas Are Gone": Without a simple rule list (in this case stripping all dots), the phrase "Sony Ericsson W610i" does not get cracked. It's found on the page but it has a dot at the end.
 
+#TODOs
+'''
+- Still there are newlines or something making their way into the final wordlists. eleiminate.
+    - in the 3-word file for example, Ctrl + f :ing for "Iglesias" reveals the problem (this is because certain words in the phrase are enclosed in <b> tags?)
+- Multithreading, I think I'm network-bottlenecked?
+    - If doing this, be sure to implement a rate-limit option
+- Be more explicit in which variables need to end in a /
+'''
 
-#TODO: Still there are newlines or something making their way into the final wordlists. eleiminate.
-#   - in the 3-word file for example, Ctrl + f :ing for "Iglesias" reveals the problem (this is because certain words in the phrase are enclosed in <b> tags?)
-#TODO: Multithreading, I think I'm network-bottlenecked?
 
 
 #NOTE: These few variables you need to manually edit for each site.
@@ -17,18 +22,20 @@ START_URL = "https://cry-of-fear.fandom.com/wiki/Cry_of_Fear_Wiki" #NOTE: the UR
 ROOT_URL = "https://cry-of-fear.fandom.com/"   #NOTE: this is the webroot, so all relative paths go from this. An example of a relative path is:   href="/wiki/Co-op_Campaign"
 IN_SCOPE = "https://cry-of-fear.fandom.com/wiki"      #NOTE: Sometimes appropriately set to the same URL as the webroot, all found URL:s must start with this string in order to be included for processing (or translate to starting with this in the case of relative paths being used).
 OUT_OF_SCOPE_PATH = ["/Special:Log", "/Special:Search", "/register", "/login", "/reset-password", "/signin", "/User", "/File:", "/Template:", "/Forum:", "/Talk:", "/Message_Wall:", "/Special:", "/Thread:", "/MediaWiki:"] #NOTE: This list is relative to the IN_SCOPE value and needs to be custom-edited for each site. If any of these values directly follow the IN_SCOPE URL, don't process that URL. 
+
+STOP_AFTER_X_LINKS = 1  #NOTE: Stop analysing after X links. Useful for if you want to maybe only analyse the START_URL. Default value = 0 (stop after all links are visited)
+KEEP_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_&" #NOTE: Strip any characters that don't belong to this set from each word/phrase
+#KEEP_CHARS = "".join(chr(i) for i in range(32, 127)) #Standard ASCII printables, newlines not included
+CONVERT_TO_LOWERCASE = False #Convert all words/phrases to lowercase
 OUT_OF_SCOPE_STRING = ["?", "#"] #NOTE: if any of the substrings in here are detected ANYWHERE as part of the URL AFTER the IN_SCOPE, don't process that URL.
 DISALLOWED_FILE_EXTENSIONS = [".wav", ".ogg", ".png", ".jpg", ".jpeg", ".webp", ".mp3", ".mp4"] #NOTE: Don't process any path's ending with these strings.
 #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
 
 
 INCLUDE_TAGS = ["p", "big", "small","span", "b", "strong", "i", "em", "mark", "del", "ins", "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "q", "code", "li", "dt", "dd"] #TODO: manually add more "text" elements to analyze here. Are there any more??
-STRIP_CHARS = ["\n", "\r", "\t"]    #NOTE: strip all occurences of these chars in gathered phrases.
-
-
+#STRIP_CHARS = ["\n", "\r", "\t"]    #strip all occurences of these chars in gathered phrases. EDIT: deprecating this in favour of allowlist
 LINK_NR = 0
-#STOP_AFTER_X_LINKS = 3000
-SITE_LINKS = [] #Dynamically filled with all links/pages on the site
+SITE_LINKS = []  #Dynamically filled with all links/pages on the site
 
 
 
@@ -44,8 +51,11 @@ def scrape_site(URL:str):
         tag_contents = []
         for j, element in enumerate(soup.find_all(tag)):
             stripped_string = element.text  # Get the text from the HTML tag (similar to innerHTML)
-            for c in STRIP_CHARS:           #Strip unwanted characters from the string
-                stripped_string = stripped_string.replace(c, "")
+            for c in stripped_string:           #Strip unwanted characters from the string
+                if(c not in KEEP_CHARS):
+                    stripped_string = stripped_string.replace(c, "")
+            if(CONVERT_TO_LOWERCASE):           #Convert all letters to lowercase
+                stripped_string = stripped_string.lower()
             tag_contents.append(stripped_string)
         site_contents.append(tag_contents)
 
@@ -94,14 +104,17 @@ def write_wordlist(name:str, content:str):
 
 
 #Given a URL, gather all href's from it and visit each URL if it hasn't already been visited. Recursive.
-#NOTE: one commented-out href on CoF wiki start page literally looks like this:   href="//cry-of-fear.fandom.com"  (that means it's not a bug in your program)
 def build_sitemap(URL:str, link_nr:int):
     global LINK_NR
-#    if(LINK_NR >= STOP_AFTER_X_LINKS):    #temporary
-#        return
+    if(STOP_AFTER_X_LINKS > 0):
+        if(LINK_NR >= STOP_AFTER_X_LINKS): #Analyse maximum X links
+            return
+
+    SITE_LINKS.append(URL)
+    LINK_NR += 1
         
     res = requests.get(URL)
-    links_on_url = []
+    links_on_url = []             #TODO: unused logging variable 
     #print(f"\tINFO: processing link {link_nr}, code = {res.status_code}, URL = {URL}\t\tCL = {len(res.content)}")
     print(f"\tINFO: processing link {link_nr}, code = {res.status_code}, URL = {URL}")
 
@@ -113,11 +126,14 @@ def build_sitemap(URL:str, link_nr:int):
         if(link.has_attr('href')):
             link_text = link["href"]  
 
-            #If relative path is being used, construct an absolute path from it called "to_visit"
+            #Construct an absolute path from the value in the href
             to_visit = None
-            if(link_text.startswith("/")):    #Handle relative links.
+            if(link_text.startswith("//")):     #Handle protocol-relative links
+                to_visit = "https:" + link_text if ROOT_URL.startswith("https:") else "http:" + link_text  #TODO: not thjoroughly tested
+            elif(link_text.startswith("/")):     #Handle relative links
                 to_visit = ROOT_URL[:-1] + link_text if(ROOT_URL.endswith("/")) else ROOT_URL + link_text   #domain + the relative link. This assumes a relative URL always start with /
-            else: to_visit = link_text
+            else:                               #href value is already absolute; copy it. TODO: am I failing to check for other types of links?
+                to_visit = link_text
 
             #Check if we are in scope
             if(not to_visit.startswith(IN_SCOPE)):
@@ -149,8 +165,8 @@ def build_sitemap(URL:str, link_nr:int):
                         if(not exit_iteration):
                             #If we pass all checks and site has not already been visited, visit it
                             if(to_visit not in SITE_LINKS):
-                                SITE_LINKS.append(to_visit)
-                                LINK_NR += 1
+                                #SITE_LINKS.append(to_visit)
+                                #LINK_NR += 1
                                 build_sitemap(to_visit, LINK_NR)
 
 
@@ -173,13 +189,12 @@ if __name__=="__main__":
     words3 = []
     words4 = []
     for i, link in enumerate(SITE_LINKS):
-        print(f"\tINFO: Extracting phrases from link nr {i}: \"{link}\":")
+        print(f"\tINFO: Extracting phrases from link nr {i}: {link}")
         link_contents = scrape_site(link)
         words1 += (to_wordlist(link_contents, 1, delimiter))
         words2 += (to_wordlist(link_contents, 2, delimiter))
         words3 += (to_wordlist(link_contents, 3, delimiter))
         words4 += (to_wordlist(link_contents, 4, delimiter))
-        
         #print(f"DEBUG: here is what's returned from scrape_site(): \n\n{link_contents}")
 
     #Remove duplicates
